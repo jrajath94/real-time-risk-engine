@@ -1,171 +1,88 @@
 # real-time-risk-engine
 
-> GPU-accelerated portfolio Value-at-Risk that turns a 55ms CPU calculation into 2ms, enabling sub-second risk updates for 5,000-position portfolios.
+> Python implementation of Monte Carlo portfolio Value-at-Risk — vectorized NumPy simulation supporting historical, parametric, and Monte Carlo methods with stress testing
 
 [![CI](https://github.com/jrajath94/real-time-risk-engine/workflows/CI/badge.svg)](https://github.com/jrajath94/real-time-risk-engine/actions)
-[![Coverage](https://codecov.io/gh/jrajath94/real-time-risk-engine/branch/main/graph/badge.svg)](https://codecov.io/gh/jrajath94/real-time-risk-engine)
+[![Coverage](https://codecov.io/gh/jrajath94/real-time-risk-engine/branch/master/graph/badge.svg)](https://codecov.io/gh/jrajath94/real-time-risk-engine)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![CUDA 11.0+](https://img.shields.io/badge/CUDA-11.0+-green.svg)](https://developer.nvidia.com/cuda-toolkit)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/downloads/)
 
-## The Problem
+## Why This Exists
 
-A hedge fund manages a $10 billion portfolio with 5,000 positions across equities, futures, and options. Every 5 minutes, the risk system recalculates Value-at-Risk: at 99% confidence, what is the worst we could lose in 1 day?
-
-The calculation is Monte Carlo: simulate 100,000 possible market moves based on historical volatility and correlation, revalue the portfolio in each scenario, take the 1% worst case. On a multi-threaded CPU, this takes 50-100ms. Not slow for most systems, but for real-time risk monitoring at a trading desk, 50ms is an eternity. Markets move in microseconds. A risk system that lags by 50ms per update cannot keep pace with 5-minute recalculation cycles across thousands of positions.
-
-On GPU, the same calculation completes in 2ms -- a 27.5x speedup. Not because of algorithmic magic, but because Monte Carlo VaR is embarrassingly parallel. 5,000 positions times 100,000 scenarios = 500 million multiplications. A GPU does them all at once. A CPU does them in series, or near-series with threading overhead.
-
-The speedup matters beyond bragging rights. It means risk updates every 5 minutes instead of 10 (tighter risk control). It means catching a correlation breakdown or a volatility spike before the portfolio hemorrhages. During the March 2020 COVID crash, cross-asset correlations spiked from ~0.3 to ~0.8 within days. A VaR model using January 2020 correlations would have dramatically underestimated risk. Faster recalculation means faster adaptation.
-
-## What This Project Does
-
-A production-grade Monte Carlo VaR engine with GPU acceleration via CUDA, supporting non-linear instruments (options with delta-gamma approximation), stress testing, and Expected Shortfall (CVaR) -- the risk measure now required by Basel III.
-
-- **GPU Monte Carlo**: 100K scenarios across 5,000 positions in ~2ms on an A100
-- **Delta-gamma approximation**: Captures option convexity that linear models miss (ignoring gamma underestimates VaR by 20-40% for options-heavy portfolios)
-- **Cholesky correlation**: Proper correlated scenario generation with Ledoit-Wolf shrinkage for robust covariance estimation
-- **Expected Shortfall (CVaR)**: The coherent risk measure mandated by Basel III's FRTB framework
-- **Stress testing**: Replay historical crises (2008, 2020) with stressed correlation matrices
+Portfolio VaR requires simulating thousands of correlated price paths. At end-of-day that is acceptable to run overnight. For intraday risk management with active hedging, you need VaR in sub-second time. This engine implements Monte Carlo VaR with fast vectorized NumPy simulation, designed for sub-second computation on realistic portfolio sizes. It covers all three standard VaR methods (historical, parametric, Monte Carlo), Expected Shortfall for Basel III compliance, and stress testing against historical crisis scenarios — in a single dependency-light Python library.
 
 ## Architecture
 
 ```mermaid
 graph TD
-    A[Portfolio State] --> B[CPU: Covariance Matrix]
-    B -->|Ledoit-Wolf shrinkage| C[CPU: Cholesky Decomposition L*L^T]
-    C -->|PCIe transfer ~0.8ms| D[GPU Memory]
-    A -->|prices, Greeks| D
-    D --> E[CUDA Kernel: 100K threads]
-    E -->|per thread| F[Generate N independent normals]
-    F --> G[Multiply by Cholesky factor L]
-    G --> H[Correlated returns for all positions]
-    H --> I[Delta-gamma P&L per scenario]
-    I -->|reduction| J[GPU: Sort + percentile extraction]
-    J -->|PCIe transfer ~0.1ms| K[CPU: VaR, CVaR, component risk]
+    A[Portfolio - positions + returns history] --> B[Input Validation]
+    B --> C{VaR Method}
+    C -->|historical| D[Replay actual return distribution]
+    C -->|parametric| E[Analytical z-score via covariance matrix]
+    C -->|monte_carlo| F[Generate correlated scenarios via multivariate normal]
+    D --> G[Percentile extraction]
+    E --> G
+    F --> G
+    G --> H[RiskReport - VaR, CVaR, confidence, holding period]
+    A --> I[stress_test]
+    I --> J[Apply per-asset shocks]
+    J --> K[StressTestResult - portfolio and per-asset P&L]
 ```
 
-The architecture has three stages. On CPU: read current market data (prices, Greeks for options), compute the Cholesky decomposition of the correlation matrix (O(n^3), done once per risk cycle). On GPU: parallel simulation of 100K scenarios, where each thread generates correlated random returns for all positions and computes the portfolio P&L using delta-gamma approximation. Back to CPU: collect results, compute percentiles, decompose risk by component.
-
-The CUDA kernel is the core. Each thread handles one scenario independently: generate N independent standard normals, multiply by the lower-triangular Cholesky factor to produce correlated returns, then compute position P&L as `delta * dS + 0.5 * gamma * dS^2` for each instrument. The gamma term is critical for options -- it captures the convexity that a pure delta model misses.
+The engine is structured as pure functions — no shared state, no side effects. `historical_var`, `parametric_var`, and `monte_carlo_var` each take a `Portfolio` and configuration, validate inputs, compute the relevant distribution, and return an immutable `RiskReport`. `stress_test` applies a list of `StressScenario` objects (each mapping symbols to return shocks) and returns per-asset P&L breakdowns. Covariance estimation uses `numpy.cov` with validation that sufficient history exists before decomposition.
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/jrajath94/real-time-risk-engine.git
 cd real-time-risk-engine
-pip install -e ".[cuda]"
+make install && make test
 ```
 
 ```python
 import numpy as np
-from real_time_risk_engine import Portfolio, RiskCalculator
+from real_time_risk_engine import Portfolio, Position, monte_carlo_var, stress_test, StressScenario
 
-positions = {
-    'SPY': {'quantity': 1000, 'price': 450.0, 'volatility': 0.16},
-    'QQQ': {'quantity': 500, 'price': 380.0, 'volatility': 0.22},
-    'IWM': {'quantity': 250, 'price': 185.0, 'volatility': 0.25},
-}
-
-correlation_matrix = np.array([
-    [1.0, 0.85, 0.70],
-    [0.85, 1.0, 0.65],
-    [0.70, 0.65, 1.0],
+portfolio = Portfolio(positions=[
+    Position(symbol="SPY", quantity=1000, current_price=450.0),
+    Position(symbol="QQQ", quantity=500, current_price=380.0),
 ])
 
-portfolio = Portfolio(positions=positions, correlation_matrix=correlation_matrix)
-risk_engine = RiskCalculator(gpu_id=0, num_paths=100_000, confidence_level=0.99)
-results = risk_engine.calculate_var(portfolio)
+# Attach 252 days of historical returns (shape: T x N)
+portfolio.returns_history = np.random.multivariate_normal(
+    mean=[0.0003, 0.0004],
+    cov=[[0.0004, 0.00034], [0.00034, 0.0006]],
+    size=252,
+)
 
-print(f"VaR (99%, 1-day): ${results.var_99:,.0f}")
-print(f"CVaR (99%):       ${results.cvar_99:,.0f}")
-print(f"Compute time:     {results.compute_time_ms:.2f}ms")
+report = monte_carlo_var(portfolio, confidence=0.99, num_simulations=10_000)
+print(f"VaR (99%, 1-day): ${report.var_value:,.0f}")
+print(f"CVaR (99%):       ${report.cvar_value:,.0f}")
+
+# Stress test: 2008-style market shock
+results = stress_test(portfolio, scenarios=[
+    StressScenario(name="2008 crisis", shocks={"SPY": -0.40, "QQQ": -0.45}),
+])
+print(f"2008 scenario P&L: ${results[0].portfolio_pnl:,.0f}")
 ```
 
-## Key Results
+## Key Design Decisions
 
-**GPU vs. CPU Performance** (NVIDIA A100, Intel Xeon):
-
-| Portfolio Size   | Scenarios | CPU (ms) | GPU (ms) | Speedup   |
-| ---------------- | --------- | -------- | -------- | --------- |
-| 500 positions    | 10,000    | 3.2      | 0.8      | 4x        |
-| 1,000 positions  | 50,000    | 18       | 1.1      | 16x       |
-| 5,000 positions  | 100,000   | 55       | 2.0      | **27.5x** |
-| 5,000 positions  | 1,000,000 | 520      | 8.5      | **61x**   |
-| 10,000 positions | 1,000,000 | 2,100    | 35       | **60x**   |
-
-The GPU advantage grows with problem size. At small sizes (500 positions, 10K scenarios), kernel launch and PCIe transfer overhead eats most of the advantage. The crossover where GPU beats CPU is around 1,000 positions with 10,000+ scenarios.
-
-**GPU vs. FPGA vs. CPU**:
-
-| Dimension                  | CPU     | GPU     | FPGA                |
-| -------------------------- | ------- | ------- | ------------------- |
-| Latency per computation    | ~50ms   | ~2ms    | ~0.1ms              |
-| Throughput (scenarios/sec) | 2M      | 50M     | 100M                |
-| Development time           | Days    | Weeks   | Months              |
-| Hardware cost              | $2K     | $10-40K | $5-20K              |
-| Flexibility                | Highest | High    | Low (needs resynth) |
-
-## Design Decisions
-
-| Decision                            | Rationale                                                                                                       | Alternative Considered                                                           | Tradeoff                                                       |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Monte Carlo over parametric VaR     | Handles non-linear instruments (options), fat tails, complex correlations                                       | Parametric (variance-covariance) -- assumes normality, which broke badly in 2008 | 50x more compute but captures the real risk distribution       |
-| Delta-gamma approximation           | Captures option convexity; ignoring gamma underestimates VaR by 20-40% for options-heavy books                  | Delta-only (faster, simpler)                                                     | Doubles shared memory per thread but critical for accuracy     |
-| Cholesky with Ledoit-Wolf shrinkage | Sample covariance is singular when dimensions > observations (5,000 assets, 252 days). Shrinkage guarantees PSD | Raw sample covariance (fails Cholesky)                                           | Slightly biased estimate but always decomposable               |
-| Per-thread cuRAND state             | Eliminates correlation between scenarios that would bias the VaR estimate                                       | Shared RNG with offset (saves memory)                                            | More memory per thread but statistically independent scenarios |
-| Expected Shortfall alongside VaR    | ES is coherent (satisfies subadditivity), now required by Basel III FRTB                                        | VaR alone (simpler)                                                              | Trivial to compute once you have the Monte Carlo distribution  |
-
-## How It Works
-
-**Monte Carlo VaR** simulates thousands of possible future market states and measures how badly the portfolio could perform. The core computation has three steps:
-
-**Step 1: Correlated scenario generation.** Markets are correlated -- when S&P drops, NASDAQ usually follows. To simulate realistic scenarios, generate independent standard normal random variates for each position, then multiply by the Cholesky factor of the covariance matrix. The result is a vector of correlated returns that respects the historical relationship between assets. The Cholesky decomposition (L such that LL^T = Sigma) is computed once on CPU and transferred to GPU memory. For 5,000 positions, the L matrix is 25M floats (100MB).
-
-**Step 2: Portfolio revaluation.** For each scenario, compute the portfolio P&L using the delta-gamma approximation: `PnL_i = delta_i * dS + 0.5 * gamma_i * dS^2`. For equities (delta=1, gamma=0), this is just position_size \* price_change. For options, the gamma term captures the convexity that makes risk non-linear. A 5% market drop hurts more than 5x a 1% drop for a portfolio with positive gamma exposure.
-
-**Step 3: Percentile extraction.** Sort the 100K scenario P&L values. The 99th percentile loss is VaR. The average of all losses beyond that threshold is Expected Shortfall (CVaR). ES answers the question VaR cannot: "When things go badly, how badly do they go on average?"
-
-**When Cholesky fails:** Estimated covariance matrices are sometimes not positive semi-definite due to missing data, stale prices on illiquid assets, or high dimensionality (more assets than observations). The engine uses [Ledoit-Wolf shrinkage](https://scikit-learn.org/stable/modules/generated/sklearn.covariance.LedoitWolf.html), which blends the sample covariance with a structured target (identity scaled by average variance). This guarantees PSD and reduces estimation error. For large portfolios, shrinkage is not optional -- it is required.
-
-**The fundamental limitation:** Correlations are estimated from the last 252 days of returns and assumed stable. In reality, correlations spike during crises -- exactly when accurate risk measurement matters most. Mitigation strategies include stressed VaR (running with crisis-period correlation matrices), exponentially weighted correlations (RiskMetrics decay factor 0.94), and regime-switching models.
+| Decision | Rationale | Alternative Considered | Tradeoff |
+|----------|-----------|----------------------|----------|
+| Three VaR methods in one library | Historical (non-parametric, distribution-free), parametric (fast, assumes normality), Monte Carlo (flexible, handles complex portfolios) — each appropriate for different use cases | Single method only | More surface area but covers the Basel III toolkit in a single dependency |
+| Expected Shortfall alongside VaR | ES is coherent (satisfies subadditivity), required by Basel III FRTB; trivial to compute from the same Monte Carlo distribution | VaR alone | Negligible extra cost after simulation |
+| Pure-function API with immutable `RiskReport` | No shared state; results cannot be mutated between computation and reporting | Stateful calculator object | Forces explicit re-computation on portfolio changes, but eliminates stale-result bugs |
+| `_z_score_for_confidence` via rational approximation | Avoids scipy dependency; Beasley-Springer-Moro approximation is accurate to ~1e-6 | `scipy.stats.norm.ppf` (simpler, more precise) | One less dependency; precision is sufficient for all VaR use cases |
+| Stress test as separate function | Stress scenarios are deterministic (no simulation), so separating them makes the API surface clearer | Embed stress test inside `monte_carlo_var` | More explicit — stress testing and probabilistic VaR answer different questions |
 
 ## Testing
 
 ```bash
-make test      # Unit + integration tests (Monte Carlo convergence, Greeks accuracy)
-make bench     # GPU performance benchmarks
-make lint      # Ruff + mypy
+make test    # Unit + integration tests
+make lint    # Ruff + mypy
 ```
-
-## Project Structure
-
-```
-real-time-risk-engine/
-    src/real_time_risk_engine/
-        __init__.py              # Package exports
-        core.py                  # GPU kernel orchestration + VaR computation
-        models.py                # Portfolio, Position, Option data structures
-        utils.py                 # Covariance estimation, Cholesky helpers
-    tests/
-        conftest.py              # Shared fixtures (sample portfolios)
-    benchmarks/                  # GPU scaling benchmarks
-    examples/                    # Quickstart scripts
-    docs/
-        architecture.md          # CUDA kernel design
-        interview-prep.md        # Technical deep-dive
-    Makefile                     # install, test, bench, lint
-    pyproject.toml               # Dependencies + tool config
-```
-
-## What I'd Improve
-
-- **Live Greeks ingestion.** The current version recomputes option Greeks from Black-Scholes. Production market makers update Greeks in real-time from implied volatility surfaces. Ingesting live Greeks from a market data feed would give the actual market's risk view, not a theoretical approximation.
-
-- **Variance reduction techniques.** Antithetic variates (for every random draw z, also simulate -z) and stratified sampling can achieve the accuracy of 1M naive scenarios with only 50K, a 20x computation reduction. These are straightforward to implement on GPU and would make the engine practical even on consumer GPUs.
-
-- **Regime-switching correlation models.** Maintain separate correlation matrices for normal and stressed regimes with a hidden Markov model estimating which regime is active. Switch matrices accordingly. More complex but captures the non-stationary behavior that makes backward-looking risk models dangerous.
 
 ## License
 
-MIT -- Rajath John
+MIT — Rajath John
