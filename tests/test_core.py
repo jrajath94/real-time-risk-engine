@@ -7,13 +7,10 @@ import numpy as np
 import pytest
 
 from real_time_risk_engine.risk import (
-    DEFAULT_CONFIDENCE_LEVEL,
-    MIN_HISTORY_FOR_COVARIANCE,
     Portfolio,
     Position,
     RiskReport,
     StressScenario,
-    StressTestResult,
     VaRMethod,
     estimate_covariance,
     historical_var,
