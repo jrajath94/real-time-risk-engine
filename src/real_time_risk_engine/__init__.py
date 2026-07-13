@@ -1,4 +1,4 @@
-"""Sub-ms portfolio VaR with Monte Carlo simulation."""
+"""Portfolio VaR with Monte Carlo, historical, and parametric methods."""
 from .risk import (
     DEFAULT_CONFIDENCE_LEVEL,
     DEFAULT_MONTE_CARLO_SAMPLES,
