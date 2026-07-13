@@ -5,7 +5,7 @@
 [![CI](https://github.com/jrajath94/real-time-risk-engine/workflows/CI/badge.svg)](https://github.com/jrajath94/real-time-risk-engine/actions)
 [![Coverage](https://codecov.io/gh/jrajath94/real-time-risk-engine/branch/master/graph/badge.svg)](https://codecov.io/gh/jrajath94/real-time-risk-engine)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-green.svg)](https://www.python.org/downloads/)
 
 ## Why This Exists
 
