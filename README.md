@@ -1,6 +1,6 @@
 # real-time-risk-engine
 
-> Python implementation of Monte Carlo portfolio Value-at-Risk — vectorized NumPy simulation supporting historical, parametric, and Monte Carlo methods with stress testing
+> Python implementation of Monte Carlo portfolio Value-at-Risk - vectorized NumPy simulation supporting historical, parametric, and Monte Carlo methods with stress testing
 
 [![CI](https://github.com/jrajath94/real-time-risk-engine/workflows/CI/badge.svg)](https://github.com/jrajath94/real-time-risk-engine/actions)
 [![Coverage](https://codecov.io/gh/jrajath94/real-time-risk-engine/branch/master/graph/badge.svg)](https://codecov.io/gh/jrajath94/real-time-risk-engine)
@@ -9,7 +9,7 @@
 
 ## Why This Exists
 
-Portfolio VaR requires simulating thousands of correlated price paths. At end-of-day that is acceptable to run overnight. For intraday risk management with active hedging, you need VaR in sub-second time. This engine implements Monte Carlo VaR with fast vectorized NumPy simulation, designed for sub-second computation on realistic portfolio sizes. It covers all three standard VaR methods (historical, parametric, Monte Carlo), Expected Shortfall for Basel III compliance, and stress testing against historical crisis scenarios — in a single dependency-light Python library.
+Portfolio VaR requires simulating thousands of correlated price paths. At end-of-day that is acceptable to run overnight. For intraday risk management with active hedging, you need VaR in sub-second time. This engine implements Monte Carlo VaR with fast vectorized NumPy simulation, designed for sub-second computation on realistic portfolio sizes. It covers all three standard VaR methods (historical, parametric, Monte Carlo), Expected Shortfall for Basel III compliance, and stress testing against historical crisis scenarios - in a single dependency-light Python library.
 
 ## Architecture
 
@@ -29,7 +29,7 @@ graph TD
     J --> K[StressTestResult - portfolio and per-asset P&L]
 ```
 
-The engine is structured as pure functions — no shared state, no side effects. `historical_var`, `parametric_var`, and `monte_carlo_var` each take a `Portfolio` and configuration, validate inputs, compute the relevant distribution, and return an immutable `RiskReport`. `stress_test` applies a list of `StressScenario` objects (each mapping symbols to return shocks) and returns per-asset P&L breakdowns. Covariance estimation uses `numpy.cov` with validation that sufficient history exists before decomposition.
+The engine is structured as pure functions - no shared state, no side effects. `historical_var`, `parametric_var`, and `monte_carlo_var` each take a `Portfolio` and configuration, validate inputs, compute the relevant distribution, and return an immutable `RiskReport`. `stress_test` applies a list of `StressScenario` objects (each mapping symbols to return shocks) and returns per-asset P&L breakdowns. Covariance estimation uses `numpy.cov` with validation that sufficient history exists before decomposition.
 
 ## Quick Start
 
@@ -70,11 +70,11 @@ print(f"2008 scenario P&L: ${results[0].portfolio_pnl:,.0f}")
 
 | Decision | Rationale | Alternative Considered | Tradeoff |
 |----------|-----------|----------------------|----------|
-| Three VaR methods in one library | Historical (non-parametric, distribution-free), parametric (fast, assumes normality), Monte Carlo (flexible, handles complex portfolios) — each appropriate for different use cases | Single method only | More surface area but covers the Basel III toolkit in a single dependency |
+| Three VaR methods in one library | Historical (non-parametric, distribution-free), parametric (fast, assumes normality), Monte Carlo (flexible, handles complex portfolios) - each appropriate for different use cases | Single method only | More surface area but covers the Basel III toolkit in a single dependency |
 | Expected Shortfall alongside VaR | ES is coherent (satisfies subadditivity), required by Basel III FRTB; trivial to compute from the same Monte Carlo distribution | VaR alone | Negligible extra cost after simulation |
 | Pure-function API with immutable `RiskReport` | No shared state; results cannot be mutated between computation and reporting | Stateful calculator object | Forces explicit re-computation on portfolio changes, but eliminates stale-result bugs |
 | `_z_score_for_confidence` via rational approximation | Avoids scipy dependency; Beasley-Springer-Moro approximation is accurate to ~1e-6 | `scipy.stats.norm.ppf` (simpler, more precise) | One less dependency; precision is sufficient for all VaR use cases |
-| Stress test as separate function | Stress scenarios are deterministic (no simulation), so separating them makes the API surface clearer | Embed stress test inside `monte_carlo_var` | More explicit — stress testing and probabilistic VaR answer different questions |
+| Stress test as separate function | Stress scenarios are deterministic (no simulation), so separating them makes the API surface clearer | Embed stress test inside `monte_carlo_var` | More explicit - stress testing and probabilistic VaR answer different questions |
 
 ## Testing
 
@@ -85,4 +85,4 @@ make lint    # Ruff + mypy
 
 ## License
 
-MIT — Rajath John
+MIT - Rajath John
